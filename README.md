@@ -33,6 +33,7 @@ Materials from the talk at **Claude Community Wrocław #4** (20.10.2026) · Konr
 - [Before you ship the next agent](#-before-you-ship-the-next-agent)
 - [Numbers from the talk](#-numbers-from-the-talk)
 - [Safety notes](#-safety-notes)
+- [Official docs](#-official-docs)
 
 ---
 
@@ -77,8 +78,8 @@ These three checks look at different things, and only one of them looks at behav
 
 | Check | Answers | Catches a broken `description`? |
 |---|---|:-:|
-| `/skill-doctor` | A usage and cost report: what each skill costs and how often it fires. Flags skills that are never invoked. Needs Claude Code ≥ 2.1.252. | ❌ pass |
-| `claude plugin validate .` | Does the frontmatter and manifest parse? | ❌ pass |
+| `/skill-doctor` | A usage report: what each skill costs in context and how often it gets used. Flags skills that are in the listing but never invoked, plugin skills included. Opens in the `/plugin` **Stats** tab. Needs Claude Code ≥ 2.1.252. | ❌ pass |
+| `claude plugin validate .` | Are the manifest and the skill, agent and command files valid (syntax and schema)? | ❌ pass |
 | `claude plugin eval .` | Does the skill fire on the prompt and beat the baseline? | ✅ **93% → 0%** |
 
 > [!IMPORTANT]
@@ -91,11 +92,13 @@ These three checks look at different things, and only one of them looks at behav
 
 ## 🚀 Quick start (15 minutes, your own skill)
 
-**You need:** Claude Code ≥ 2.1.296 (for `claude plugin eval`), Python 3, and a folder with a skill
-or plugin (`.claude-plugin/plugin.json` + `skills/<name>/SKILL.md`).
+**You need:** Claude Code ≥ 2.1.269 (for `claude plugin eval`), git ≥ 2.31 if git is installed, and
+a plugin folder (`.claude-plugin/plugin.json` + `skills/<name>/SKILL.md`). Python 3 is only needed for
+the eval-explainer viewer. Every eval run and judge call is a real model call on your plan or API bill.
 
 ```bash
-claude --version                        # ≥ 2.1.296
+claude --version                        # ≥ 2.1.269
+git --version                           # ≥ 2.31, if git is installed
 cd path/to/your-plugin
 ```
 
@@ -126,12 +129,14 @@ claude plugin eval init                 # guided: sources inputs, designs grader
 claude plugin eval init --bare my-case  # or a blank single-case template
 ```
 
-A case is a folder: `evals/cases/<id>/prompt.md` plus one file per grader in `graders/`:
+A case is a folder: `evals/<case>/prompt.md` plus at least one grader file in `graders/`. Each run
+starts in an empty working directory, so put the input (a diff, a file, a ticket) into the prompt
+itself. Unknown frontmatter keys are an error.
 
 <details>
 <summary><b>Example case</b> (from the demo: commit messages)</summary>
 
-`evals/cases/docs-typo-fix/prompt.md`
+`evals/docs-typo-fix/prompt.md`
 
 ````markdown
 ---
@@ -193,15 +198,25 @@ one thing but are another. Use real inputs, not synthetic ones.
 ### 4 · Run skill vs baseline
 
 ```bash
-# one case first: cheap smoke test (~20 s)
+mkdir -p out
+
+# one case first: cheap smoke test
 claude plugin eval . --case my-case --runs 1 --max-cost-usd 1 --no-publish --json out/smoke.json
 
-# the full suite: each case runs with the skill and without it, on the same prompt
+# the full suite: each case runs with the plugin and without it, on the same prompt
 claude plugin eval . --runs 3 -j 8 --max-cost-usd 15 --no-publish --json out/full.json
 ```
 
-`--ablation with-without` is the default. Δ = (score with the skill) − (score without it), per case.
-A judge model different from the one under test is set with `--judge-model`.
+- **Two arms by default.** When a plugin is found, each case runs with it (`WITH`) and without it
+  (`W/OUT`). Δ = `WITH` − `W/OUT`, per case. `--ablation none` runs only the with-arm, at half the cost.
+- **A "skill fired" check is an indicator, not a score.** In a two-arm run, `tool_used: Skill` graders
+  are excluded from the score in both arms, because they can never pass without the plugin. Under
+  `--ablation none` they count.
+- **Choose the judge.** It defaults to Claude Code's background-task model. Set `--judge-model`
+  yourself, to a different model from the one under test (`--model`).
+- `--max-cost-usd` is checked before each run starts. Runs already in flight finish, so spend can go
+  a little over the ceiling. If any run is left unstarted, the command exits 2 with partial results.
+- Put the target (`.`) before `--json`, and give `--json` a path that ends in `.json`.
 
 ### 5 · Read *why*
 
@@ -216,10 +231,14 @@ time per run. It runs locally and binds to `127.0.0.1`.
 ### 6 · Gate the merge
 
 ```bash
-claude plugin eval . --threshold 1.0    # default: exit 1 if any case scores below it
+claude plugin eval . --threshold 0.8    # exit 1 if any case's with-arm score is below 0.8
 ```
 
-Keep `evals/` in the repo next to the skill. **Test cases are code.**
+The default `--threshold` is `1.0`: any case below perfect fails. Δ is reported but never changes the
+exit code, so gate on the score and read Δ yourself.
+
+Keep `evals/` in the repo next to the skill, and add `evals/results/` to `.gitignore`.
+**Test cases are code.**
 
 ---
 
@@ -232,11 +251,14 @@ pick the one you need.
 <summary><b>1 · Triage: which skills deserve an eval?</b></summary>
 
 ```text
-Run /skill-doctor and read the report. List every skill with: how often it fired,
-what it costs, and whether it was never invoked. Then rank the top 3 skills I
-should write evals for first, and say why (high cost, never fires, or business-critical).
+Run `claude -p "/skill-doctor"` in Bash (in -p mode it prints the report as text)
+and read the report. List every skill with: how often it was used, what it costs
+in context, and whether it was never invoked. Then rank the top 3 skills I should
+write evals for first, and say why (high cost, never fires, or business-critical).
 Don't change any files.
 ```
+
+Or run `/skill-doctor` yourself, look at the **Stats** tab, and paste what you see.
 
 </details>
 
@@ -255,17 +277,20 @@ turn into assertions. If you think a bare prompt would do just as well, say so.
 <summary><b>3 · Draft the case set (≥10 real inputs)</b></summary>
 
 ```text
-Help me build an eval suite for the skill <name> under evals/cases/.
+Help me build an eval suite for the skill <name> under evals/ (one directory per case).
 Source real inputs from this repo's history (e.g. `git log -p`) or from <source>,
 not synthetic ones. Aim for ~15 cases: 8 happy path, 5 edge, 2 adversarial
 (inputs that look like one category but belong to another).
-For each case create evals/cases/<id>/prompt.md with frontmatter
+For each case create evals/<case>/prompt.md with frontmatter
 (name, description, tags, max_turns, timeout_seconds, allowed_tools) and the
 exact same user prompt wording across cases, only the input differs.
+Each run starts in an empty directory, so paste the input into the prompt body.
+Phrase the prompt the way a user would type it, without naming the skill.
 Show me the list of cases before writing files.
 ```
 
-Alternative: `claude plugin eval init` runs this interview for you.
+Alternative: `claude plugin eval init` runs this interview for you. It needs a terminal, so in CI
+use `claude plugin eval init --bare <name>`.
 
 </details>
 
@@ -273,7 +298,7 @@ Alternative: `claude plugin eval init` runs this interview for you.
 <summary><b>4 · Graders: assertions first, judge second</b></summary>
 
 ```text
-For each case in evals/cases/, add graders under graders/:
+For each case directory under evals/, add graders under graders/:
 - regex graders for everything checkable (format, expected type/category,
   required markers, "must not invent output" for empty inputs);
 - one tool_used grader that checks the skill <name> actually fired;
@@ -346,9 +371,13 @@ Rule: **the judge is never the same model as the one under test.**
 ```text
 Add a CI job that, on every change under skills/ or evals/, runs:
   claude plugin validate . --strict
-  claude plugin eval . --trust-plugin --no-publish --max-cost-usd <budget> --threshold <t>
-and fails the PR on a non-zero exit. Put the cost ceiling and threshold in
-variables, and upload the JSON result as a build artifact.
+  claude plugin eval . --trust-plugin --json results.json --no-publish \
+    --model <model> --judge-model <judge> --max-cost-usd <budget> --threshold <t>
+and fails the PR on a non-zero exit (1 = a case below threshold or a run error,
+2 = partial run, such as the cost ceiling). Pin both models so a model rollout
+isn't mistaken for a regression. Put the models, cost ceiling and threshold in
+variables, use ANTHROPIC_API_KEY from CI secrets, and upload results.json as a
+build artifact.
 ```
 
 </details>
@@ -404,7 +433,8 @@ What to take from it:
 - **Tell the room the stop condition before you run.** A hard budget means the team stops itself and
   reports *Achieved · Remaining · cost per agent · Recommendation* instead of looping forever.
 - **Enforce it in code.** A script checks the budget before every round and every call, and a watchdog
-  kills a call mid-flight. In our trials, `--max-budget-usd` only checks between turns and overshot.
+  kills a call mid-flight. The CLI's `--max-budget-usd` works only in print mode (`-p`), and the docs
+  warn that spend can pass the cap. In our trials it overshot.
 - With a generous budget (a 500k-token sample run) the same team succeeded in round 2 for **$0.26 in 79 s**.
 
 ---
@@ -447,10 +477,25 @@ the judge was Sonnet.
 
 - `claude plugin eval` runs the plugin and its suite **on your machine, as you**. Only evaluate
   plugins you trust.
-- By default the HTML report may be **published to claude.ai**. Add `--no-publish` to keep it local.
+- If you're signed in with a claude.ai subscription, the HTML report is also **published as a private
+  claude.ai artifact**. Add `--no-publish` to keep it local. Runs that a Claude session starts for you
+  stay local unless you pass `--publish-report`.
+- Runs never stop to ask for permission. Tools beyond the read-only set (`Bash`, `Write`, `Edit`,
+  `WebFetch`…) are removed unless you grant them with `--allow-tools`, and a granted Bash runs inside
+  the OS sandbox.
 - The CLI prints the report's absolute path, which includes your home directory. Crop it out of
   screenshots and recordings.
 - `evals/results/` holds raw answers and local paths, so it is gitignored here.
+
+---
+
+## 📚 Official docs
+
+- [Test plugins with evals](https://code.claude.com/docs/en/plugin-evals): `claude plugin eval`, case format, grader types, CI exit codes
+- [Measure plugin cost and usage](https://code.claude.com/docs/en/plugins/measure) and [Find unused skills](https://code.claude.com/docs/en/skills#find-unused-skills): `/skill-doctor`
+- [Plugin commands reference](https://code.claude.com/docs/en/plugins/cli-reference): `claude plugin validate`, `claude plugin eval init`
+- [Extend Claude with skills](https://code.claude.com/docs/en/skills): how a skill's `description` decides when it fires
+- [Create a Claude Code plugin](https://code.claude.com/docs/en/plugins/create)
 
 ---
 
