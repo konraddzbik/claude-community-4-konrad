@@ -1,0 +1,11 @@
+# Speaker deck source: contains private speaker notes and hidden slides.
+# Share slides/trust-but-eval-ccw4.pdf instead.
+*.pptx
+*.key
+~$*
+
+# Local eval output (absolute paths, raw answers)
+evals/results/
+
+.DS_Store
+__pycache__/
