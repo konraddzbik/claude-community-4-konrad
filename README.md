@@ -6,7 +6,7 @@
 
 Materials from the talk at **Claude Community Wrocław #4** (20.10.2026) · Konrad Dżbik, CSHARK
 
-[📑 Slides (PDF)](slides/trust-but-eval-ccw4.pdf) ·
+[📑 Slides (PDF)](Trust_but_eval_CCW4_EN.pdf) ·
 [🔍 eval-explainer](https://github.com/CShark-Hub/eval-explainer) ·
 [📒 Promptbook](#-promptbook)
 
@@ -503,7 +503,7 @@ the judge was Sonnet.
 
 ```text
 README.md                         you are here
-slides/trust-but-eval-ccw4.pdf    the deck shown on stage
+Trust_but_eval_CCW4_EN.pdf        the deck shown on stage
 ```
 
 <div align="center">
